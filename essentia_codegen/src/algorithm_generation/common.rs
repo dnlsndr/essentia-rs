@@ -1,8 +1,27 @@
+//! Helpers shared by the per-algorithm code-generation submodules.
+//!
+//! Three concerns:
+//!
+//! * [`sanitize_identifier_string`] — escape Rust keywords by appending an
+//!   underscore so they can be used as identifiers without breaking the
+//!   parser.
+//! * [`string_to_doc_comment`] — turn an Essentia free-form description
+//!   into a sequence of `#[doc = "…"]` attributes. We word-wrap to 80
+//!   columns to keep the generated source readable.
+//! * [`data_type_enum_to_data_type_marker`] — translate a
+//!   [`DataType`](essentia_core::DataType) enum value into the matching
+//!   compile-time marker path under `crate::data_type`.
+
 use essentia_core::DataType;
 use proc_macro2::TokenStream;
 use quote::quote;
 use textwrap::fill;
 
+/// Append `_` to the input if it is a Rust keyword.
+///
+/// Essentia parameters use names like `type` or `mode` which clash with
+/// reserved words. Without escaping, the generated code would refuse to
+/// compile.
 pub fn sanitize_identifier_string(string: &str) -> String {
     match string {
         "type" | "match" | "if" | "else" | "while" | "for" | "loop" | "fn" | "let" | "mut"
@@ -14,12 +33,19 @@ pub fn sanitize_identifier_string(string: &str) -> String {
     }
 }
 
+/// Word-wrap `string` to 80 columns and emit it as a series of
+/// `#[doc = "…"]` attributes.
+///
+/// We can't just use `///` line comments — the codegen produces a
+/// [`TokenStream`] which then goes through `prettyplease`, and at that
+/// level the doc comments have to be the desugared `#[doc = "…"]` form.
 pub fn string_to_doc_comment(string: &str) -> TokenStream {
     let wrapped = fill(string, 80);
     let lines = wrapped.lines();
 
     let mut tokens = TokenStream::new();
     for line in lines {
+        // Leading space inside the string mimics the `/// …` convention.
         let line = format!(" {}", line);
         tokens.extend(quote! {
             #[doc = #line]
@@ -29,6 +55,12 @@ pub fn string_to_doc_comment(string: &str) -> TokenStream {
     tokens
 }
 
+/// Translate a [`DataType`] runtime variant into the corresponding
+/// compile-time marker path.
+///
+/// e.g. [`DataType::Float`] → `crate::data_type::Float`. Used wherever the
+/// generated code needs to spell out a static type marker as a token
+/// stream.
 pub fn data_type_enum_to_data_type_marker(data_type: &DataType) -> TokenStream {
     match data_type {
         DataType::Bool => quote! { crate::data_type::Bool },

@@ -1,3 +1,5 @@
+//! [`Essentia`] runtime handle and its construction errors.
+
 mod error;
 mod essentia;
 

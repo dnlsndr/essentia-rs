@@ -1,38 +1,95 @@
+//! Runtime [`DataType`] tag and its compile-time mirror under [`data_type`].
+//!
+//! Essentia is dynamically typed; every value carries a runtime tag selected
+//! from a fixed set of ~25 types. This file:
+//!
+//! 1. Defines [`DataType`], the Rust-side mirror of the C++ enum.
+//! 2. Defines a parallel set of *zero-sized marker structs* under [`data_type`]
+//!    — `data_type::Float`, `data_type::VectorInt`, etc. — that act as
+//!    compile-time tokens. Each marker has exactly one corresponding
+//!    [`DataType`] variant.
+//! 3. Defines the [`HasDataType`] trait, the bridge between the two: every
+//!    marker implements it with a `const DATA_TYPE: DataType` so that generic
+//!    code over `T: HasDataType` can recover the runtime tag at compile time.
+//!
+//! The point of this dual representation is that the compile-time markers can
+//! be used as type parameters (e.g. `DataContainer<data_type::Float>`) so the
+//! type checker enforces correctness, while the runtime tag is still available
+//! for cases where the value's type is only known dynamically (introspection,
+//! generic `DataContainer::data_type()` queries, …).
+
 use essentia_sys::ffi;
 use std::fmt;
 
+/// Runtime tag identifying which payload an Essentia value carries.
+///
+/// Mirrors the C++ enum on the FFI side. Each variant has a corresponding
+/// zero-sized marker in the [`data_type`] module and a `HasDataType`
+/// implementation linking the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
+    /// Single-precision floating point (`f32` in Rust, `Real` in Essentia).
     Float,
+    /// UTF-8 string.
     String,
+    /// Boolean.
     Bool,
+    /// Signed 32-bit integer.
     Int,
+    /// Unsigned 32-bit integer (used by some I/O algorithms for sample
+    /// counts, etc.).
     UnsignedInt,
+    /// Signed 64-bit integer.
     Long,
+    /// Stereo audio sample — a `(left, right)` pair of `f32`.
     StereoSample,
+    /// Single complex number (`re + im·i`, both `f32`).
     Complex,
+    /// 4-D tensor of `f32` (used by Essentia's TensorFlow integration).
     TensorFloat,
+    /// `Vec<f32>` — the most common audio-data carrier (a frame, a spectrum, …).
     VectorFloat,
+    /// `Vec<String>`.
     VectorString,
+    /// `Vec<bool>`.
     VectorBool,
+    /// `Vec<i32>`.
     VectorInt,
+    /// `Vec<StereoSample>` — typically a stereo audio buffer.
     VectorStereoSample,
+    /// `Vec<Complex>` — e.g. an FFT output.
     VectorComplex,
+    /// `Vec<Vec<f32>>` — e.g. a sequence of frames.
     VectorVectorFloat,
+    /// `Vec<Vec<String>>`.
     VectorVectorString,
+    /// `Vec<Vec<StereoSample>>`.
     VectorVectorStereoSample,
+    /// `Vec<Vec<Complex>>`.
     VectorVectorComplex,
+    /// `Vec<MatrixFloat>` — sequence of 2-D matrices.
     VectorMatrixFloat,
+    /// `Map<String, Vec<f32>>` — feature aggregations keyed by name.
     MapVectorFloat,
+    /// `Map<String, Vec<String>>`.
     MapVectorString,
+    /// `Map<String, Vec<i32>>`.
     MapVectorInt,
+    /// `Map<String, Vec<Complex>>`.
     MapVectorComplex,
+    /// `Map<String, f32>`.
     MapFloat,
+    /// 2-D matrix of `f32`, in row-major order.
     MatrixFloat,
+    /// An entire [`Pool`](crate::Pool) — an algorithm can both produce and
+    /// consume one as a single value.
     Pool,
 }
 
 impl DataType {
+    /// Stable, human-readable name for this type. Matches the variant
+    /// identifier (`"Float"`, `"VectorFloat"`, …) — handy for error messages
+    /// and for displaying introspection results.
     pub fn as_str(&self) -> &'static str {
         match self {
             DataType::Float => "Float",
@@ -73,6 +130,10 @@ impl fmt::Display for DataType {
 }
 
 impl From<ffi::DataType> for DataType {
+    /// Convert from the raw FFI enum to this Rust-side mirror.
+    ///
+    /// Panics if the C++ side ever introduces a new variant that hasn't been
+    /// added here — that would mean the bindings are out of sync.
     fn from(ffi_type: ffi::DataType) -> Self {
         match ffi_type {
             ffi::DataType::Float => DataType::Float,
@@ -108,6 +169,8 @@ impl From<ffi::DataType> for DataType {
 }
 
 impl From<DataType> for ffi::DataType {
+    /// Convert back to the raw FFI enum, used when the Rust side needs to
+    /// hand a runtime type tag to C++ (e.g. `setup_output`).
     fn from(data_type: DataType) -> Self {
         match data_type {
             DataType::Float => ffi::DataType::Float,
@@ -141,51 +204,123 @@ impl From<DataType> for ffi::DataType {
     }
 }
 
+/// Compile-time tags that mirror every variant of [`DataType`].
+///
+/// Each marker struct here is *zero-sized* and exists only at the type level.
+/// They are used as type arguments to [`DataContainer<T>`](crate::DataContainer)
+/// and as the right-hand side of conversion traits (`IntoDataContainer<T>`,
+/// `GetFromDataContainer<T>`).
+///
+/// The mapping is one-to-one:
+///
+/// | runtime variant            | compile-time marker |
+/// |----------------------------|---------------------|
+/// | [`DataType::Float`]        | [`Float`]           |
+/// | [`DataType::VectorFloat`]  | [`VectorFloat`]     |
+/// | [`DataType::Pool`]         | [`Pool`]            |
+/// | … etc.                     | …                   |
+///
+/// Why not just use `DataType` as a const generic? Because `DataType` is an
+/// enum, and using it as `DataContainer<const T: DataType>` would require
+/// `feature(adt_const_params)`. Using a marker type per variant keeps the
+/// crate on stable Rust and lets each marker independently implement traits
+/// like [`HasDataType`], [`ParameterData`](super::ParameterData),
+/// [`InputOutputData`](super::InputOutputData), and
+/// [`PoolData`](super::PoolData).
 pub mod data_type {
+    /// Type-erased marker — used by [`DataContainer::into_any`] to opt out
+    /// of static type checking. A `DataContainer<Any>` still carries a
+    /// runtime tag.
     pub struct Any;
 
-    // Scalar types
+    // -- Scalars --------------------------------------------------------------
+    /// Boolean. Maps to [`super::DataType::Bool`].
     pub struct Bool;
+    /// UTF-8 string. Maps to [`super::DataType::String`].
     pub struct String;
+    /// Signed 32-bit integer. Maps to [`super::DataType::Int`].
     pub struct Int;
+    /// Single-precision float. Maps to [`super::DataType::Float`].
     pub struct Float;
+    /// Unsigned 32-bit integer. Maps to [`super::DataType::UnsignedInt`].
     pub struct UnsignedInt;
+    /// Signed 64-bit integer. Maps to [`super::DataType::Long`].
     pub struct Long;
+    /// `(left, right)` stereo audio sample. Maps to
+    /// [`super::DataType::StereoSample`].
     pub struct StereoSample;
+    /// Single complex number. Maps to [`super::DataType::Complex`].
     pub struct Complex;
+    /// 4-D float tensor (TensorFlow integration). Maps to
+    /// [`super::DataType::TensorFloat`].
     pub struct TensorFloat;
 
-    // Vector types
+    // -- Vectors --------------------------------------------------------------
+    /// `Vec<bool>`. Maps to [`super::DataType::VectorBool`].
     pub struct VectorBool;
+    /// `Vec<String>`. Maps to [`super::DataType::VectorString`].
     pub struct VectorString;
+    /// `Vec<i32>`. Maps to [`super::DataType::VectorInt`].
     pub struct VectorInt;
+    /// `Vec<f32>` — the most common audio carrier. Maps to
+    /// [`super::DataType::VectorFloat`].
     pub struct VectorFloat;
+    /// `Vec<StereoSample>`. Maps to [`super::DataType::VectorStereoSample`].
     pub struct VectorStereoSample;
+    /// `Vec<Complex>`. Maps to [`super::DataType::VectorComplex`].
     pub struct VectorComplex;
 
-    // Nested vector types
+    // -- Nested vectors -------------------------------------------------------
+    /// `Vec<Vec<f32>>`. Maps to [`super::DataType::VectorVectorFloat`].
     pub struct VectorVectorFloat;
+    /// `Vec<Vec<String>>`. Maps to [`super::DataType::VectorVectorString`].
     pub struct VectorVectorString;
+    /// `Vec<Vec<StereoSample>>`. Maps to
+    /// [`super::DataType::VectorVectorStereoSample`].
     pub struct VectorVectorStereoSample;
+    /// `Vec<Vec<Complex>>`. Maps to [`super::DataType::VectorVectorComplex`].
     pub struct VectorVectorComplex;
+    /// `Vec<MatrixFloat>`. Maps to [`super::DataType::VectorMatrixFloat`].
     pub struct VectorMatrixFloat;
 
-    // Matrix types
+    // -- Matrices -------------------------------------------------------------
+    /// 2-D matrix of `f32`, row-major. Maps to [`super::DataType::MatrixFloat`].
     pub struct MatrixFloat;
 
-    // Map types
+    // -- Maps -----------------------------------------------------------------
+    /// `Map<String, Vec<f32>>`. Maps to [`super::DataType::MapVectorFloat`].
     pub struct MapVectorFloat;
+    /// `Map<String, Vec<String>>`. Maps to
+    /// [`super::DataType::MapVectorString`].
     pub struct MapVectorString;
+    /// `Map<String, Vec<i32>>`. Maps to [`super::DataType::MapVectorInt`].
     pub struct MapVectorInt;
+    /// `Map<String, Vec<Complex>>`. Maps to
+    /// [`super::DataType::MapVectorComplex`].
     pub struct MapVectorComplex;
+    /// `Map<String, f32>`. Maps to [`super::DataType::MapFloat`].
     pub struct MapFloat;
 
+    /// An entire [`Pool`](crate::Pool) used as a value. Maps to
+    /// [`super::DataType::Pool`].
     pub struct Pool;
 }
 
+/// Bridges the compile-time markers in [`data_type`] to their runtime
+/// [`DataType`] variant.
+///
+/// Implemented exactly once for each marker. Generic code can therefore go
+/// from `T: HasDataType` to a [`DataType`] at no runtime cost — the value
+/// is `T::DATA_TYPE`, a `const`.
+///
+/// Example use: when `Algorithm::set_parameter::<T>` validates a user-supplied
+/// value against the introspected parameter type, it calls `T::data_type()`
+/// to obtain the runtime tag for `T`.
 pub trait HasDataType {
+    /// The [`DataType`] variant this marker corresponds to.
     const DATA_TYPE: DataType;
 
+    /// Convenience accessor returning [`Self::DATA_TYPE`] as a value.
     fn data_type() -> DataType {
         Self::DATA_TYPE
     }

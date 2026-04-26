@@ -1,3 +1,21 @@
+//! Generation of output accessors on the per-algorithm `<Algo>Result`
+//! struct.
+//!
+//! For each output declared in an algorithm's introspection, this module
+//! produces a method
+//!
+//! ```ignore
+//! pub fn output_name(&self) -> DataContainer<'result, crate::data_type::Foo> { … }
+//! ```
+//!
+//! that returns a typed [`DataContainer`](essentia_core::DataContainer)
+//! borrowing from the algorithm's internal output buffer. Users can then
+//! call `.get()` (or `.try_get()`) on the container to read the value as a
+//! Rust type via the conversion traits.
+//!
+//! As with `compute` and the parameter setters, runtime mismatches are
+//! statically unreachable and so produce panics rather than `Result`s.
+
 use convert_case::{Case, Casing};
 use essentia_core::Introspection;
 use proc_macro2::TokenStream;
@@ -7,6 +25,8 @@ use crate::algorithm_generation::common::{
     data_type_enum_to_data_type_marker, sanitize_identifier_string, string_to_doc_comment,
 };
 
+/// Emit one method per declared output, ready to be dropped into the
+/// `<Algo>Result` impl block.
 pub fn generate_output_functions(introspection: &Introspection) -> Vec<TokenStream> {
     introspection
         .outputs()

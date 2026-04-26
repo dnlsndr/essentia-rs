@@ -1,16 +1,47 @@
+//! [`DataContainer`] → Rust conversions.
+//!
+//! Mirror of `conversion_into.rs` for the read direction. Algorithm outputs
+//! and pool reads come back as a [`DataContainer<T>`]; these traits unwrap
+//! that into idiomatic Rust types.
+//!
+//! Two traits cover the spectrum:
+//!
+//! * [`GetFromDataContainer<T>`] — infallible read, used when the static `T`
+//!   marker on the container guarantees a successful conversion.
+//! * [`TryGetFromDataContainer<T>`] — fallible read, used when the
+//!   conversion can fail at runtime (e.g. interpreting a
+//!   [`VectorVectorFloat`](crate::data::data_type::VectorVectorFloat) as
+//!   a 2-D `Array2` requires the rows to be rectangular).
+
 use essentia_sys::ffi;
 use ndarray::{Array2, Array4};
 use std::collections::HashMap;
 
 use crate::{ConversionError, DataContainer, Pool, data_type};
 
+/// Read the value out of a typed container into the Rust type `T`.
+///
+/// The blanket parameter `T` is the **target** Rust type; the impl is
+/// chosen by the static marker on the source `DataContainer<…>`. So a
+/// `DataContainer<data_type::Float>` has only one impl
+/// (`GetFromDataContainer<f32>`), whereas a
+/// `DataContainer<data_type::VectorVectorFloat>` has multiple impls
+/// (`Vec<Vec<f32>>`, `Array2<f32>` via `TryGetFromDataContainer`, …).
 pub trait GetFromDataContainer<T> {
+    /// Perform the conversion. Should never fail in practice — any failure
+    /// would indicate the C++ side returned a value of the wrong type, in
+    /// which case there is a bug elsewhere.
     fn get(&self) -> T;
 }
 
+/// Like [`GetFromDataContainer`], but the conversion can fail (typically
+/// because the source data does not satisfy the target's shape constraints).
 pub trait TryGetFromDataContainer<T> {
+    /// Perform the conversion or return a [`ConversionError`].
     fn try_get(&self) -> Result<T, ConversionError>;
 }
+
+// -- Scalars --------------------------------------------------------------
 
 impl<'a> GetFromDataContainer<bool> for DataContainer<'a, data_type::Bool> {
     fn get(&self) -> bool {
@@ -56,11 +87,14 @@ impl<'a> GetFromDataContainer<ffi::StereoSample> for DataContainer<'a, data_type
 
 impl<'a> GetFromDataContainer<num::Complex<f32>> for DataContainer<'a, data_type::Complex> {
     fn get(&self) -> num::Complex<f32> {
+        // Repack from the FFI struct (real/imag fields) to num::Complex.
         let ffi_complex = self.inner.as_ref().get_complex().unwrap();
         num::Complex::new(ffi_complex.real, ffi_complex.imag)
     }
 }
 
+/// 4-D tensor → ndarray. The C++ side guarantees the slice's length
+/// matches the product of the shape, so the unwrap is safe.
 impl<'a> GetFromDataContainer<Array4<f32>> for DataContainer<'a, data_type::TensorFloat> {
     fn get(&self) -> Array4<f32> {
         let tensor = self.inner.as_ref().get_tensor_float().unwrap();
@@ -75,6 +109,8 @@ impl<'a> GetFromDataContainer<Array4<f32>> for DataContainer<'a, data_type::Tens
         Array4::from_shape_vec(shape, tensor.slice.to_vec()).unwrap() // Safe because C++ guarantees correct dimensions
     }
 }
+
+// -- Flat vectors ---------------------------------------------------------
 
 impl<'a> GetFromDataContainer<Vec<bool>> for DataContainer<'a, data_type::VectorBool> {
     fn get(&self) -> Vec<bool> {
@@ -126,6 +162,8 @@ impl<'a> GetFromDataContainer<Vec<num::Complex<f32>>>
     }
 }
 
+// -- Matrices and vectors of matrices -------------------------------------
+
 impl<'a> GetFromDataContainer<Array2<f32>> for DataContainer<'a, data_type::MatrixFloat> {
     fn get(&self) -> Array2<f32> {
         let matrix_float = self.inner.as_ref().get_matrix_float().unwrap();
@@ -157,6 +195,8 @@ impl<'a> GetFromDataContainer<Vec<Array2<f32>>>
     }
 }
 
+// -- Nested vectors -------------------------------------------------------
+
 impl<'a> GetFromDataContainer<Vec<Vec<f32>>> for DataContainer<'a, data_type::VectorVectorFloat> {
     fn get(&self) -> Vec<Vec<f32>> {
         self.inner
@@ -169,6 +209,11 @@ impl<'a> GetFromDataContainer<Vec<Vec<f32>>> for DataContainer<'a, data_type::Ve
     }
 }
 
+/// Reinterpret a `VectorVectorFloat` as a 2-D `Array2`.
+///
+/// Fails if the source has zero rows, zero columns, or non-rectangular rows
+/// — the same conditions as the corresponding `TryIntoDataContainer` for
+/// `MatrixFloat`.
 impl<'a> TryGetFromDataContainer<Array2<f32>> for DataContainer<'a, data_type::VectorVectorFloat> {
     fn try_get(&self) -> Result<Array2<f32>, ConversionError> {
         let vec_vec_data = self.inner.as_ref().get_vector_vector_float().unwrap();
@@ -259,6 +304,8 @@ impl<'a> GetFromDataContainer<Vec<Vec<num::Complex<f32>>>>
     }
 }
 
+// -- Maps ------------------------------------------------------------------
+
 impl<'a> GetFromDataContainer<HashMap<String, f32>> for DataContainer<'a, data_type::MapFloat> {
     fn get(&self) -> HashMap<String, f32> {
         self.inner
@@ -336,6 +383,10 @@ impl<'a> GetFromDataContainer<HashMap<String, Vec<num::Complex<f32>>>>
     }
 }
 
+/// Read a [`Pool`] back out of a container.
+///
+/// The resulting Pool clones the underlying C++ bridge, so it can outlive
+/// the algorithm that produced it.
 // TODO Maybe the Pool should be take a reference to the PoolBridge?
 impl<'a> GetFromDataContainer<Pool> for DataContainer<'a, data_type::Pool> {
     fn get(&self) -> Pool {

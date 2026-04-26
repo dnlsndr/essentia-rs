@@ -1,4 +1,9 @@
 .idea
 
 /target
-essentia/generated
+
+# Auto-generated algorithm tree. Rebuilt on every `cargo build` by
+# `essentia/build.rs` (and on demand by `cargo run -p essentia-codegen`).
+# The path is stable across cleans so IDE tooling can resolve it, but the
+# contents are not tracked.
+essentia/src/algorithm/generated/

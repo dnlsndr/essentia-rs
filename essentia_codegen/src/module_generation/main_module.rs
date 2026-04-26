@@ -1,9 +1,20 @@
+//! Generation of the top-level `mod.rs` listing every category.
+//!
+//! This file lives at `<out_dir>/mod.rs` and is the entry point that the
+//! `essentia` crate `include!`s into its `algorithm` module. Its only job
+//! is to declare the per-category sub-modules.
+
 use std::path::Path;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse_quote;
 
+/// Write `<out_dir>/mod.rs` with one `pub mod <category>;` declaration per
+/// category.
+///
+/// As with [`category_module`](super::category_module), the input is
+/// sorted before writing so the output is deterministic.
 pub fn generate_main_module_file(
     out_dir: &Path,
     category_module_names: &[String],
